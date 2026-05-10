@@ -6,6 +6,9 @@ projects (`.als`).
 `.als` files are gzipped XML; this CLI decompresses, parses, and walks the
 project model so you can extract information about it without opening Ableton.
 
+Much of project focus as of v0.1.0 is on DJ mixes, samples, and mixtapes.
+More broad functionality may be supported in future releases.
+
 ## Status
 
 - **Live version:** Live 11 project files.
