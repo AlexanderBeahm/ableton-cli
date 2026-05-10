@@ -245,6 +245,31 @@ Run a focused failing test with `cargo test <pattern>`.
 
 ---
 
+## Versioning & release notes
+
+Every release is driven by the `version` field in `Cargo.toml` on `main`.
+The release workflow (`.github/workflows/release.yml`) runs on every push
+to `main`, detects a version bump versus the previous commit, and — if the
+version changed — tags `v<version>` and publishes a GitHub Release with
+binaries for Linux + Windows MSVC.
+
+**When bumping `Cargo.toml` `version`, you MUST also add a matching entry
+to `HISTORY.md`** at the repo root. Without it, the release workflow fails
+the merge to `main`.
+
+- Section header format: `## vMAJOR.MINOR.PATCH - YYYY-MM-DD`
+  (the version must match `Cargo.toml` exactly).
+- Body: user-facing bullet points — new commands, behavior changes,
+  bugfixes, breaking changes. Skip internal refactors and chore work.
+- The workflow extracts everything between this header and the next
+  `## v...` header verbatim as the GitHub Release body.
+
+Pushes to `main` that do not bump the version are no-ops for the release
+workflow (the `gate` job skips downstream build/publish). Manual
+`workflow_dispatch` always runs the build + publish path.
+
+---
+
 ## Conventions in this codebase
 
 - Errors flow through one crate-wide `Error` enum (`src/error.rs`); commands

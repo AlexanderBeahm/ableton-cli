@@ -142,3 +142,9 @@ cargo llvm-cov --summary-only # measure coverage (requires cargo-llvm-cov)
 ```
 
 Coverage target: at least 85% line coverage over the whole crate.
+
+## Releases
+
+See [`HISTORY.md`](./HISTORY.md) for user-facing changes per version.
+Releases are produced automatically when `Cargo.toml` `version` is bumped
+on `main`; each version must have a matching entry in `HISTORY.md`.
