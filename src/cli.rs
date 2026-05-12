@@ -33,9 +33,16 @@ pub struct TracklistArgs {
     #[arg(short = 'o', long = "output")]
     pub output: Option<PathBuf>,
 
-    /// Use absolute sample paths instead of file basenames.
-    #[arg(long = "full-paths")]
+    /// Use absolute sample paths instead of file basenames. Equivalent to
+    /// `--track-template "{PATH}"`.
+    #[arg(long = "full-paths", conflicts_with = "track_template")]
     pub full_paths: bool,
+
+    /// Template for each entry's label. Tokens: {ARTIST}, {TITLE}, {ALBUM},
+    /// {ALBUMARTIST}, {YEAR}, {TRACK}, {GENRE}, {COMPOSER}, {COMMENT},
+    /// {FILENAME}, {PATH}. Default: "{ARTIST} - {TITLE}".
+    #[arg(long = "track-template", value_name = "STRING")]
+    pub track_template: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -61,6 +68,7 @@ impl Cli {
                 project_path: args.path,
                 output: args.output,
                 full_paths: args.full_paths,
+                track_template: args.track_template,
             }),
             Command::Prune(args) => prune::run(PruneOptions {
                 project_path: args.path,
@@ -84,6 +92,7 @@ mod tests {
                 assert_eq!(args.path, PathBuf::from("/some/path.als"));
                 assert!(args.output.is_none());
                 assert!(!args.full_paths);
+                assert!(args.track_template.is_none());
             }
             _ => panic!("expected tracklist"),
         }
@@ -107,6 +116,43 @@ mod tests {
             }
             _ => panic!("expected tracklist"),
         }
+    }
+
+    #[test]
+    fn parses_tracklist_with_track_template() {
+        let cli = Cli::try_parse_from([
+            "ableton-cli",
+            "tracklist",
+            "/p.als",
+            "--track-template",
+            "{TITLE}",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Tracklist(args) => {
+                assert_eq!(args.track_template.as_deref(), Some("{TITLE}"));
+            }
+            _ => panic!("expected tracklist"),
+        }
+    }
+
+    #[test]
+    fn errors_on_full_paths_and_track_template_together() {
+        let err = Cli::try_parse_from([
+            "ableton-cli",
+            "tracklist",
+            "/p.als",
+            "--full-paths",
+            "--track-template",
+            "{TITLE}",
+        ])
+        .unwrap_err();
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("cannot be used with") || msg.contains("conflict"),
+            "expected conflict error, got: {}",
+            err
+        );
     }
 
     #[test]

@@ -64,7 +64,7 @@ Build a deduplicated tracklist of audio samples used in arrangement view,
 sorted by their first occurrence on the timeline.
 
 ```bash
-# Print to stdout
+# Print to stdout (default format: "{ARTIST} - {TITLE}")
 ableton-cli tracklist /path/to/project.als
 
 # Or pass the project folder (must contain exactly one .als)
@@ -75,14 +75,17 @@ ableton-cli tracklist /path/to/project.als -o tracklist.txt
 
 # Use absolute sample paths in the output
 ableton-cli tracklist /path/to/project.als --full-paths
+
+# Custom label template
+ableton-cli tracklist /path/to/project.als --track-template "{TITLE} ({YEAR})"
 ```
 
 Output format:
 
 ```
-1. 00:00:000 - sometrack.mp3
-2. 00:01:300 - sometrack2.m4a
-3. 00:03:236 - somtrakc3.wav
+1. 00:00:000 - Alice - Track One
+2. 00:01:300 - Bob - Track Two
+3. 00:03:236 - some-untagged-file
 
 Total Length: 00:06:303
 ```
@@ -90,6 +93,51 @@ Total Length: 00:06:303
 Timestamps use `MM:SS:mmm` (minutes / seconds / milliseconds). Tempo
 automation is honoured: clip beat positions are converted to wall-clock
 seconds by integrating the project's tempo curve.
+
+### Labels and `--track-template`
+
+By default each entry is labeled `{ARTIST} - {TITLE}`, reading the
+metadata embedded in the audio file (ID3, Vorbis comments, MP4 atoms,
+etc.). When the metadata is absent or the file isn't reachable on disk,
+the label falls back silently to the filename with the extension stripped.
+
+`--track-template <STRING>` lets you customize the format. Supported
+tokens (case-insensitive):
+
+| Token            | Source                                                   |
+|------------------|----------------------------------------------------------|
+| `{ARTIST}`       | artist tag                                               |
+| `{TITLE}`        | title tag                                                |
+| `{ALBUM}`        | album tag                                                |
+| `{ALBUMARTIST}`  | album artist tag                                         |
+| `{YEAR}`         | recording year                                           |
+| `{TRACK}`        | track number (decimal, unpadded)                         |
+| `{GENRE}`        | genre tag                                                |
+| `{COMPOSER}`     | composer tag                                             |
+| `{COMMENT}`      | comment tag                                              |
+| `{FILENAME}`     | basename of the sample's path, extension stripped        |
+| `{PATH}`         | absolute path (or relative path, if no absolute is known)|
+
+Unknown tokens (e.g. `{FOO}`) render as empty. If a token is missing,
+surrounding separator characters around it are cleaned up so you don't
+get stray punctuation. For example, with a file tagged only with artist
+`Alice`:
+
+- `"{ARTIST} - {TITLE}"` → `Alice` (trailing ` - ` stripped)
+- `"{ALBUM} | {ARTIST} - {TITLE}"` → `Alice` (leading and trailing
+  separators stripped)
+- `"{ARTIST} - {ALBUM} - {TITLE}"` → `Alice` (full collapse — no title,
+  no album, only artist remains)
+
+Separator characters used for cleanup: space, tab, `-`, `–`, `—`, `,`,
+`|`, `;`. Path-like characters (`/`, `\`, `:`) are deliberately not
+treated as separators so paths and time-of-day strings survive.
+
+If every token resolves to empty, the label falls back to the filename
+with the extension stripped.
+
+`--full-paths` is exactly equivalent to `--track-template "{PATH}"`.
+The two flags cannot be combined.
 
 ### Behaviour
 
@@ -101,6 +149,8 @@ seconds by integrating the project's tempo curve.
   any track, including duplicates.
 - When given a folder, the CLI looks for exactly one `.als` (non-recursive)
   and errors otherwise.
+- Metadata reads are best-effort: missing or unreadable files silently
+  fall back to filenames.
 
 ### `prune`
 

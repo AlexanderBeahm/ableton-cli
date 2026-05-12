@@ -1,6 +1,6 @@
 [package]
 name = "ableton-cli"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "CLI utility for inspecting and transforming Ableton Live projects"
 license = "MIT"
@@ -21,11 +21,13 @@ roxmltree = "0.20"
 thiserror = "1.0"
 anyhow = "1.0"
 walkdir = "2"
+lofty = "0.21"
 
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.1"
 tempfile = "3.10"
+id3 = "1"
 
 [profile.release]
 lto = true

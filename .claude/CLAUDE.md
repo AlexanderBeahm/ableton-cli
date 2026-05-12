@@ -17,8 +17,9 @@ cargo build --release                   # → target/release/ableton-cli
 cargo test                              # full test suite (unit + integration)
 cargo llvm-cov --summary-only           # coverage report (target ≥ 85%)
 
-# Run the only command currently implemented:
-ableton-cli tracklist <PATH> [-o FILE] [--full-paths]
+# Currently implemented commands:
+ableton-cli tracklist <PATH> [-o FILE] [--full-paths | --track-template "<STR>"]
+ableton-cli prune     <PATH> [-o FILE] [--delete]
 ```
 
 `<PATH>` is either an `.als` file or a folder containing exactly one `.als`.
@@ -41,12 +42,18 @@ src/
 │   └── parser.rs         XML → typed model (roxmltree)
 └── commands/
     ├── mod.rs            command modules
-    └── tracklist.rs      tracklist logic + formatter
+    ├── prune.rs          prune logic + filesystem walk
+    └── tracklist/
+        ├── mod.rs        TracklistOptions, run, build_tracklist, format_tracklist
+        ├── template.rs   {ARTIST}/{TITLE}/… template parser + render + cleanup
+        └── metadata.rs   TrackMetadata + lofty wrapper for audio file tags
 
 tests/
 ├── fixtures/forjc.als    real 37 KB Live 11 fixture (3 audio tracks,
 │                         tempo automation 132→135→132→155 BPM)
 └── tracklist_integration.rs  end-to-end binary tests via assert_cmd
+                              (audio fixtures built at test time as WAV+ID3
+                              via `id3` dev-dep)
 ```
 
 ### Data flow for a command
@@ -83,8 +90,6 @@ enum Tempo {
   in `.als` are stored in beats. Use `Tempo::seconds_at(beats)` to convert.
 - **`SampleRef::identity()`** is the dedup key (absolute path → relative path
   → name).
-- **`SampleRef::display_label(full_paths)`** picks the right rendering for
-  output: basename by default, absolute path when the flag is set.
 - **`Project::last_clip_end_beats()`** returns the latest `end_beats` across
   all audio tracks — used for project total length.
 
@@ -165,29 +170,66 @@ making `seconds_at` O(log n) via binary search over points.
 
 ---
 
-## Tracklist semantics (current command)
+## Tracklist semantics
 
-`build_tracklist(project, full_paths)` →
+`build_tracklist(project, template)` →
 
 1. Collect every `AudioClip` from every `AudioTrack`.
 2. Sort by `start_beats` ascending.
 3. Walk in order, deduplicate by `SampleRef::identity()` (first occurrence wins).
-4. For each kept entry: convert `start_beats` → seconds via the project tempo.
+4. For each kept entry: convert `start_beats` → seconds via the project tempo,
+   and render the label with `template.render(metadata::extract(sample))`.
 5. **Total length** = `tempo.seconds_at(project.last_clip_end_beats())` —
    uses **all** clips (including the duplicates not in the entry list).
 
 Output format:
 
 ```
-1. 00:00:000 - sample-a.flac
-2. 03:52:727 - sample-b.flac
+1. 00:00:000 - Alice - Track One
+2. 03:52:727 - Bob - Track Two
 …
-N. MM:SS:mmm - sample-x.ext
+N. MM:SS:mmm - filename-fallback
 
 Total Length: MM:SS:mmm
 ```
 
 Minutes can grow past 99 (e.g. `100:01:005`).
+
+### Label resolution
+
+`commands::tracklist::run` resolves a `Template` from CLI options before
+calling `build_tracklist`:
+
+- `--track-template <STR>` → user template (wins over everything else).
+- `--full-paths` alone → `Template::parse("{PATH}")`.
+- Neither → `Template::parse("{ARTIST} - {TITLE}")`.
+
+`commands::tracklist::metadata::extract(&SampleRef)` returns a `TrackMetadata`
+with `filename` always populated (basename without extension, falling back
+to `SampleRef::name`) and the rest derived from the audio file's tags via
+`lofty::read_from_path`. Anything that fails (file missing, unsupported
+format, parse error, no tags) silently leaves the affected fields `None`.
+We deliberately do not warn on this.
+
+`template::Template::render` substitutes each `{TOKEN}` with the matching
+field. To handle separators around empty fields, empty fields are
+substituted as a private sentinel `\u{0001}`; the cleanup pass then:
+
+1. Drops leading/trailing runs of `[separator | sentinel]` chars.
+2. For interior runs that contain at least one sentinel, collapses to a
+   single normalized separator (one space + the first non-whitespace
+   separator in the run, if any, + one space).
+3. Leaves interior runs without sentinels untouched (the user wrote them).
+
+Separator set: ` `, `\t`, `-`, `–`, `—`, `,`, `|`, `;`. Path chars (`/`,
+`\`, `:`) are intentionally **excluded** so `{PATH}` and URL/clock-style
+strings render unmangled.
+
+If the cleaned output is empty, the label falls back to `metadata.filename`.
+
+`{ALBUMARTIST}` and `{COMPOSER}` come from `Tag::get_string(&ItemKey::…)`;
+the others use lofty's `Accessor` trait. `{TRACK}` and `{YEAR}` are decimal
+strings with no padding.
 
 ---
 
@@ -205,6 +247,11 @@ Minutes can grow past 99 (e.g. `100:01:005`).
 4. Add unit tests beside the new module and an integration test under
    `tests/` if the command's surface is non-trivial.
 5. Update README.md usage section.
+
+For commands that grow beyond a single file (template engines, sub-
+formatters, etc.), promote `commands/<name>.rs` to a `commands/<name>/`
+directory with `mod.rs` and per-concern sibling modules — see
+`commands/tracklist/{mod,template,metadata}.rs`.
 
 If a command needs project data the parser doesn't currently expose
 (e.g. MIDI clips, plugin instances), extend the parser and model — keep
@@ -283,6 +330,14 @@ workflow (the `gate` job skips downstream build/publish). Manual
 - Path-typed values: paths from `.als` (which are Windows-style on Windows
   projects) round-trip as `PathBuf`. Don't convert to strings until display
   time.
+- Audio metadata is read with `lofty` (pure-Rust, MIT). It supports
+  `.wav` (ID3 chunks), `.aiff`/`.aif` (ID3), `.flac` (Vorbis comments),
+  `.mp3` (ID3v1/v2), `.ogg` (Vorbis), `.m4a` (MP4 atoms). Metadata reads
+  are best-effort: any failure (file missing, unsupported format, parse
+  error, no tags) silently degrades to filename labels. Pin lofty to a
+  single minor — they bump minors on source-level breakage.
+- Tag string values are trimmed in `metadata::extract`; lofty
+  multi-value accessors return only the first value, by design.
 - Do not add commands that require Ableton to be installed; everything must
   run from the `.als` file alone.
 
@@ -295,5 +350,10 @@ workflow (the `gate` job skips downstream build/publish). Manual
 - MIDI clips.
 - Tempo automation curves with non-linear segment shapes (Live exposes a
   shape per point in some versions; we treat all as linear).
-- Project rendering, clip auditioning, or anything requiring the audio
-  files referenced by `<FileRef>`.
+- Project rendering or clip auditioning.
+- Warnings or errors when an audio file referenced by `<FileRef>` cannot
+  be opened — metadata reads are best-effort and degrade silently to the
+  filename.
+- Escape syntax in track templates (e.g. `{{`) — a literal `{` cannot
+  currently be embedded in a template. Templates with bare `{` followed
+  by non-letter characters are preserved as literal text.
