@@ -50,29 +50,6 @@ impl SampleRef {
         &self.name
     }
 
-    /// Display label for output. With `full_paths=true`, returns the absolute
-    /// path string when known; otherwise returns the file basename.
-    pub fn display_label(&self, full_paths: bool) -> String {
-        if full_paths {
-            if let Some(p) = self.absolute_path.as_ref().and_then(|p| p.to_str()) {
-                return p.to_string();
-            }
-            if let Some(p) = self.relative_path.as_ref().and_then(|p| p.to_str()) {
-                return p.to_string();
-            }
-        }
-        if let Some(p) = self.absolute_path.as_ref() {
-            if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
-                return name.to_string();
-            }
-        }
-        if let Some(p) = self.relative_path.as_ref() {
-            if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
-                return name.to_string();
-            }
-        }
-        self.name.clone()
-    }
 }
 
 impl Project {
@@ -116,31 +93,6 @@ mod tests {
         assert_eq!(s.identity(), "b.wav");
         let s = sample(None, None, "only-name");
         assert_eq!(s.identity(), "only-name");
-    }
-
-    #[test]
-    fn display_label_basename_default() {
-        let s = sample(Some("/a/b.wav"), None, "b.wav");
-        assert_eq!(s.display_label(false), "b.wav");
-    }
-
-    #[test]
-    fn display_label_full_path_when_requested() {
-        let s = sample(Some("/a/b.wav"), None, "b.wav");
-        assert_eq!(s.display_label(true), "/a/b.wav");
-    }
-
-    #[test]
-    fn display_label_full_path_falls_back_to_relative() {
-        let s = sample(None, Some("rel/b.wav"), "b.wav");
-        assert_eq!(s.display_label(true), "rel/b.wav");
-    }
-
-    #[test]
-    fn display_label_falls_back_to_name_when_no_paths() {
-        let s = sample(None, None, "synthetic");
-        assert_eq!(s.display_label(false), "synthetic");
-        assert_eq!(s.display_label(true), "synthetic");
     }
 
     #[test]

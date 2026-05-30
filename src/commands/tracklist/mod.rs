@@ -5,11 +5,20 @@ use crate::output::WriterTarget;
 use crate::project::{AudioClip, Project};
 use crate::project::{loader, parser};
 
+pub mod metadata;
+pub mod template;
+
+use template::Template;
+
+const DEFAULT_TEMPLATE: &str = "{ARTIST} - {TITLE}";
+const FULL_PATHS_TEMPLATE: &str = "{PATH}";
+
 #[derive(Debug, Clone)]
 pub struct TracklistOptions {
     pub project_path: PathBuf,
     pub output: Option<PathBuf>,
     pub full_paths: bool,
+    pub track_template: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,10 +39,20 @@ pub fn run(opts: TracklistOptions) -> anyhow::Result<()> {
     let als_path = loader::resolve_als_path(&opts.project_path)?;
     let xml = loader::read_als_xml(&als_path)?;
     let project = parser::parse(&xml)?;
-    let tracklist = build_tracklist(&project, opts.full_paths);
+    let template = resolve_template(&opts);
+    let tracklist = build_tracklist(&project, &template);
     let formatted = format_tracklist(&tracklist);
     WriterTarget::from_optional_path(opts.output).write(&formatted)?;
     Ok(())
+}
+
+fn resolve_template(opts: &TracklistOptions) -> Template {
+    let raw = match (opts.full_paths, opts.track_template.as_deref()) {
+        (_, Some(s)) => s,
+        (true, None) => FULL_PATHS_TEMPLATE,
+        (false, None) => DEFAULT_TEMPLATE,
+    };
+    Template::parse(raw)
 }
 
 /// Build a deduplicated tracklist from a parsed project.
@@ -41,7 +60,7 @@ pub fn run(opts: TracklistOptions) -> anyhow::Result<()> {
 /// Collects every audio clip across every audio track, sorts by start beat,
 /// and emits one entry per unique sample (first occurrence wins). Total length
 /// is the latest end-beat across **all** clips, including duplicates.
-pub fn build_tracklist(project: &Project, full_paths: bool) -> Tracklist {
+pub fn build_tracklist(project: &Project, template: &Template) -> Tracklist {
     let mut clips: Vec<&AudioClip> = project.all_clips().collect();
     clips.sort_by(|a, b| {
         a.start_beats
@@ -58,10 +77,12 @@ pub fn build_tracklist(project: &Project, full_paths: bool) -> Tracklist {
             continue;
         }
         let start_seconds = project.tempo.seconds_at(clip.start_beats);
+        let meta = metadata::extract(&clip.sample);
+        let label = template.render(&meta);
         entries.push(TracklistEntry {
             index: idx,
             start_seconds,
-            label: clip.sample.display_label(full_paths),
+            label,
         });
         idx += 1;
     }
@@ -138,6 +159,14 @@ mod tests {
         }
     }
 
+    fn default_template() -> Template {
+        Template::parse(DEFAULT_TEMPLATE)
+    }
+
+    fn full_paths_template() -> Template {
+        Template::parse(FULL_PATHS_TEMPLATE)
+    }
+
     #[test]
     fn format_timestamp_basic() {
         assert_eq!(format_timestamp(0.0), "00:00:000");
@@ -158,8 +187,6 @@ mod tests {
 
     #[test]
     fn build_tracklist_dedupes_by_sample_identity() {
-        // Same sample appears twice; only first occurrence shows in entries,
-        // but total length uses the later end.
         let project = project_with_clips(
             Tempo::Constant(120.0),
             vec![
@@ -168,15 +195,15 @@ mod tests {
                 clip("B", 16.0, 20.0, "b.wav", Some("/b.wav")),
             ],
         );
-        let tl = build_tracklist(&project, false);
+        let tl = build_tracklist(&project, &default_template());
         assert_eq!(tl.entries.len(), 2);
         assert_eq!(tl.entries[0].index, 1);
-        assert_eq!(tl.entries[0].label, "a.wav");
+        // No metadata on disk → falls back to filename without extension.
+        assert_eq!(tl.entries[0].label, "a");
         assert_eq!(tl.entries[0].start_seconds, 0.0);
         assert_eq!(tl.entries[1].index, 2);
-        assert_eq!(tl.entries[1].label, "b.wav");
+        assert_eq!(tl.entries[1].label, "b");
         assert_eq!(tl.entries[1].start_seconds, 16.0 * 60.0 / 120.0);
-        // Total length uses last clip end across all tracks (including dupes).
         assert_eq!(tl.total_seconds, 20.0 * 60.0 / 120.0);
     }
 
@@ -190,19 +217,19 @@ mod tests {
                 clip("mid", 16.0, 20.0, "b.wav", Some("/b.wav")),
             ],
         );
-        let tl = build_tracklist(&project, false);
-        assert_eq!(tl.entries[0].label, "a.wav");
-        assert_eq!(tl.entries[1].label, "b.wav");
-        assert_eq!(tl.entries[2].label, "c.wav");
+        let tl = build_tracklist(&project, &default_template());
+        assert_eq!(tl.entries[0].label, "a");
+        assert_eq!(tl.entries[1].label, "b");
+        assert_eq!(tl.entries[2].label, "c");
     }
 
     #[test]
-    fn build_tracklist_full_paths_flag_uses_absolute() {
+    fn build_tracklist_full_paths_template_uses_absolute() {
         let project = project_with_clips(
             Tempo::Constant(120.0),
             vec![clip("only", 0.0, 4.0, "a.wav", Some("/proj/a.wav"))],
         );
-        let tl = build_tracklist(&project, true);
+        let tl = build_tracklist(&project, &full_paths_template());
         assert_eq!(tl.entries[0].label, "/proj/a.wav");
     }
 
@@ -213,9 +240,49 @@ mod tests {
             audio_tracks: vec![],
             all_sample_refs: vec![],
         };
-        let tl = build_tracklist(&project, false);
+        let tl = build_tracklist(&project, &default_template());
         assert!(tl.entries.is_empty());
         assert_eq!(tl.total_seconds, 0.0);
+    }
+
+    #[test]
+    fn resolve_template_defaults_to_artist_title() {
+        let opts = TracklistOptions {
+            project_path: PathBuf::new(),
+            output: None,
+            full_paths: false,
+            track_template: None,
+        };
+        let t = resolve_template(&opts);
+        // Render with empty metadata → falls back to filename.
+        let m = metadata::TrackMetadata::for_test("song", None);
+        assert_eq!(t.render(&m), "song");
+    }
+
+    #[test]
+    fn resolve_template_full_paths_uses_path_token() {
+        let opts = TracklistOptions {
+            project_path: PathBuf::new(),
+            output: None,
+            full_paths: true,
+            track_template: None,
+        };
+        let t = resolve_template(&opts);
+        let m = metadata::TrackMetadata::for_test("song", Some("/proj/song.mp3".into()));
+        assert_eq!(t.render(&m), "/proj/song.mp3");
+    }
+
+    #[test]
+    fn resolve_template_user_supplied_overrides_default() {
+        let opts = TracklistOptions {
+            project_path: PathBuf::new(),
+            output: None,
+            full_paths: false,
+            track_template: Some("{FILENAME}".into()),
+        };
+        let t = resolve_template(&opts);
+        let m = metadata::TrackMetadata::for_test("song", None);
+        assert_eq!(t.render(&m), "song");
     }
 
     #[test]
